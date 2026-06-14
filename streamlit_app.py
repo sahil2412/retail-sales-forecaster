@@ -2,7 +2,7 @@
 streamlit_app.py
 ----------------
 Multi-Horizon Sales Forecaster with Confidence Intervals and What-If Scenarios
-Built on M5 Walmart dataset (public).
+Built on M5 Walmart dataset (public). Falls back to synthetic data on Streamlit Cloud.
 
 Tabs:
   1. Data Explorer  — history + promo periods
@@ -16,7 +16,7 @@ import pandas as pd
 import numpy as np
 import os
 
-from forecasting.preprocessing import load_sample_data, train_val_split, make_features
+from forecasting.preprocessing import load_or_build_data, train_val_split, make_features
 from forecasting.modeling import (
     train_lightgbm,
     forecast_lightgbm,
@@ -47,23 +47,22 @@ st.caption(
 )
 
 # ---------------------------------------------------------------------------
+# Data loading — cached, with synthetic fallback for Streamlit Cloud
+# ---------------------------------------------------------------------------
+
+@st.cache_data(show_spinner="Loading data...")
+def load_data():
+    return load_or_build_data()
+
+df_all = load_data()
+
+# ---------------------------------------------------------------------------
 # Sidebar — controls
 # ---------------------------------------------------------------------------
 
 with st.sidebar:
     st.header("⚙️ Controls")
 
-    # Data source
-    parquet_path = "data/m5_sample.parquet"
-    if not os.path.exists(parquet_path):
-        st.error(
-            "Sample data not found. Run `python scripts/build_sample.py` "
-            "to generate data/m5_sample.parquet from the M5 raw CSVs."
-        )
-        st.stop()
-
-    df_all = pd.read_parquet(parquet_path)
-    df_all["date"] = pd.to_datetime(df_all["date"])
     item_ids = sorted(df_all["item_id"].unique())
 
     item_id = st.selectbox("Select Item", item_ids)
@@ -153,7 +152,6 @@ with tab2:
     )
     st.plotly_chart(fig, use_container_width=True)
 
-    # Forecast summary table
     forecast_summary = pd.DataFrame({
         "Date": lgbm_result.dates,
         "Low (p10)": lgbm_result.p10.round(1),
@@ -219,7 +217,6 @@ with tab3:
         fig = plot_whatif_comparison(baseline_res, scenario_res, promo_pct)
         st.plotly_chart(fig, use_container_width=True)
 
-        # Delta summary
         delta_units = scenario_res.p50.sum() - baseline_res.p50.sum()
         delta_pct = delta_units / (baseline_res.p50.sum() + 1e-8) * 100
         c1, c2, c3 = st.columns(3)
@@ -242,10 +239,9 @@ with tab4:
     with st.spinner("Running backtest..."):
         bt_df, metrics = get_backtest_results(item_id)
 
-    # Metric cards
     c1, c2, c3, c4 = st.columns(4)
     c1.metric("MAPE", f"{metrics['MAPE']:.1f}%", help="Mean Absolute Percentage Error")
-    c2.metric("WAPE", f"{metrics['WAPE']:.1f}%", help="Weighted Absolute Percentage Error — more robust than MAPE")
+    c2.metric("WAPE", f"{metrics['WAPE']:.1f}%", help="Weighted Absolute Percentage Error")
     c3.metric("RMSE", f"{metrics['RMSE']:.1f}", help="Root Mean Squared Error (in units)")
     c4.metric(
         "80% CI Coverage",

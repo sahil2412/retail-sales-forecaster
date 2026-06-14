@@ -6,6 +6,7 @@ Handles the M5 Walmart dataset structure (sales_train_evaluation.csv + calendar.
 Also supports a simplified single-store CSV for demo/upload mode.
 """
 
+import os
 import pandas as pd
 import numpy as np
 from typing import Tuple
@@ -127,9 +128,86 @@ def train_val_split(df: pd.DataFrame, val_weeks: int = 12) -> Tuple[pd.DataFrame
 
 
 # ---------------------------------------------------------------------------
-# Load helper for Streamlit
+# Synthetic fallback — used when m5_sample.parquet doesn't exist (Streamlit Cloud)
+# ---------------------------------------------------------------------------
+
+SYNTHETIC_ITEMS = [
+    "FOODS_1_001", "FOODS_1_002", "FOODS_2_001",
+    "HOBBIES_1_001", "HOBBIES_1_002",
+    "HOUSEHOLD_1_001", "HOUSEHOLD_1_002",
+    "FOODS_3_001", "FOODS_3_002", "FOODS_3_003",
+]
+
+
+def build_synthetic_sample(n_days: int = 1000, seed: int = 42) -> pd.DataFrame:
+    """
+    Generates realistic-looking retail sales data when M5 CSVs are not available.
+    Mimics M5 structure: daily sales with seasonality, trend, price, promo, events.
+    Saves to data/m5_sample.parquet so subsequent loads are fast.
+    """
+    rng = np.random.RandomState(seed)
+    os.makedirs("data", exist_ok=True)
+    rows = []
+    base_date = pd.Timestamp("2013-01-01")
+    dates = pd.date_range(base_date, periods=n_days, freq="D")
+
+    for item_id in SYNTHETIC_ITEMS:
+        # Per-item baseline and noise characteristics
+        base_sales = rng.randint(30, 120)
+        price = round(rng.uniform(1.5, 9.9), 2)
+        trend = rng.uniform(-0.005, 0.01)
+
+        for i, date in enumerate(dates):
+            # Seasonality: weekly + annual
+            weekly = 1.3 if date.dayofweek in [5, 6] else 1.0
+            annual = 1 + 0.2 * np.sin(2 * np.pi * date.dayofyear / 365)
+            trend_mult = 1 + trend * i
+
+            # Promo: random ~8% of days
+            is_promo = int(rng.random() < 0.08)
+            promo_lift = 1.25 if is_promo else 1.0
+            promo_price = round(price * 0.85, 2) if is_promo else price
+
+            # Event: ~5% of days
+            event = "Holiday" if rng.random() < 0.05 else None
+            event_lift = 1.15 if event else 1.0
+
+            # Final sales with noise
+            mu = base_sales * weekly * annual * trend_mult * promo_lift * event_lift
+            sales = max(0, int(rng.normal(mu, mu * 0.2)))
+
+            rows.append({
+                "item_id": item_id,
+                "date": date,
+                "sales": sales,
+                "sell_price": promo_price,
+                "event_name": event,
+                "is_promo": is_promo,
+                "snap_CA": int(rng.random() < 0.3),
+            })
+
+    df = pd.DataFrame(rows)
+    df.to_parquet("data/m5_sample.parquet", index=False)
+    return df
+
+
+# ---------------------------------------------------------------------------
+# Load helper for Streamlit — with synthetic fallback
 # ---------------------------------------------------------------------------
 
 def load_sample_data(item_id: str, parquet_path: str = "data/m5_sample.parquet") -> pd.DataFrame:
     df = pd.read_parquet(parquet_path)
     return df[df["item_id"] == item_id].copy()
+
+
+def load_or_build_data(parquet_path: str = "data/m5_sample.parquet") -> pd.DataFrame:
+    """
+    Loads parquet if it exists, otherwise builds synthetic data.
+    Called by streamlit_app.py — handles both local (M5) and deployed (synthetic) environments.
+    """
+    if os.path.exists(parquet_path):
+        df = pd.read_parquet(parquet_path)
+        df["date"] = pd.to_datetime(df["date"])
+        return df
+    # Streamlit Cloud deploy — no M5 CSVs available
+    return build_synthetic_sample()
