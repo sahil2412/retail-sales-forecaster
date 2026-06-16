@@ -173,8 +173,8 @@ def build_synthetic_sample(n_days: int = 1000, seed: int = 42) -> pd.DataFrame:
             event_lift = 1.15 if event else 1.0
 
             # Final sales with noise
-            mu = max(1.0, base_sales * weekly * annual * trend_mult * promo_lift * event_lift)
-            sales = max(0, int(rng.normal(mu, mu * 0.2)))
+            mu = max(1.0, abs(base_sales * weekly * annual * trend_mult * promo_lift * event_lift))
+            sales = int(rng.poisson(mu))
 
             rows.append({
                 "item_id": item_id,
